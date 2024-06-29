@@ -7,4 +7,9 @@
 const size_t VK_PHYSICAL_DEVICE_SIZEOF = sizeof(VkPhysicalDevice);
 const size_t VK_PHYSICAL_DEVICE_ALIGNOF = alignof(VkPhysicalDevice);
 
+const size_t VK_QUEUE_FAMILY_PROPERTIES_SIZEOF =
+    sizeof(VkQueueFamilyProperties);
+
+const size_t VK_QUEUE_FAMILY_PROPERTIES_ALIGNOF =
+    alignof(VkQueueFamilyProperties);
 #endif

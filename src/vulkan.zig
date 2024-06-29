@@ -2,14 +2,12 @@ const std = @import("std");
 const c = @import("c.zig").c;
 
 pub const App = struct {
-    pub fn create() App {
-        const Self = @This();
-        return Self{ .instance = null };
-    }
     instance: c.VkInstance = null,
+
     pub fn cleanup(self: *App) void {
         c.vkDestroyInstance(self.instance, null);
     }
+
     pub fn pickPhysicalDevice(self: *App, allocator: std.mem.Allocator) !void {
         var physical_device: c.VkPhysicalDevice = null;
 
@@ -42,7 +40,7 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.AssertError;
 
         for (available_devices) |device| {
-            if (is_device_suitable(device)) {
+            if (try isDeviceSuitable(device, allocator)) {
                 physical_device = device;
                 break;
             }
@@ -141,7 +139,50 @@ pub fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     return true;
 }
 
-fn is_device_suitable(device: c.VkPhysicalDevice) bool {
-    _ = device; //We are being permissive for now.
+fn isDeviceSuitable(device: c.VkPhysicalDevice, allocator: std.mem.Allocator) !bool {
+    const indices = try findQueueFamilies(device, allocator);
+
+    if (indices.graphics_family == null) {
+        return false;
+    }
+
     return true;
+}
+
+const QueueFamilyIndices = struct {
+    graphics_family: ?u32,
+};
+
+fn findQueueFamilies(
+    device: c.VkPhysicalDevice,
+    allocator: std.mem.Allocator,
+) !QueueFamilyIndices {
+    var indices = QueueFamilyIndices{
+        .graphics_family = null,
+    };
+
+    var queue_family_count: u32 = 0;
+    c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
+
+    const queue_family_backing_slice = try allocator.alignedAlloc(
+        u8,
+        c.VK_QUEUE_FAMILY_PROPERTIES_ALIGNOF,
+        c.VK_QUEUE_FAMILY_PROPERTIES_SIZEOF * queue_family_count,
+    );
+
+    const queue_families = @as([*]c.VkQueueFamilyProperties, @ptrCast(queue_family_backing_slice.ptr))[0..queue_family_count];
+
+    c.vkGetPhysicalDeviceQueueFamilyProperties(
+        device,
+        &queue_family_count,
+        queue_families.ptr,
+    );
+
+    for (queue_families, 0..) |family, idx| {
+        if (family.queueFlags & c.VK_QUEUE_GRAPHICS_BIT == 1) {
+            indices.graphics_family = @intCast(idx);
+        }
+    }
+
+    return indices;
 }

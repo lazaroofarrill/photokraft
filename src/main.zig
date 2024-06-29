@@ -5,8 +5,7 @@ const vulkan = @import("vulkan.zig");
 const GlfwError = error.GlfwError;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+    const allocator = std.heap.c_allocator;
 
     var err = c.glfwInit();
     if (err < 0) {
