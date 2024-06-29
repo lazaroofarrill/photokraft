@@ -3,12 +3,14 @@ const c = @import("c.zig").c;
 
 pub const App = struct {
     instance: c.VkInstance = null,
+    physical_device: c.VkPhysicalDevice = null,
+    logical_device: c.VkDevice = null,
 
     pub fn cleanup(self: *App) void {
         c.vkDestroyInstance(self.instance, null);
     }
 
-    pub fn pickPhysicalDevice(self: *App, allocator: std.mem.Allocator) !void {
+    fn pickPhysicalDevice(self: *App, allocator: std.mem.Allocator) !void {
         var physical_device: c.VkPhysicalDevice = null;
 
         var device_count: u32 = 0;
@@ -47,6 +49,27 @@ pub const App = struct {
         }
 
         if (physical_device == null) return error.AssertError;
+
+        self.physical_device = physical_device;
+    }
+
+    fn createLogicalDevice(self: *App, allocator: std.mem.Allocator) !void {
+        const indices = try findQueueFamilies(self.physical_device, allocator);
+
+        if (indices.graphics_family == null) {
+            return error.NullGraphicsFamilyIndex;
+        }
+
+        var queue_priority: f32 = 1.0;
+
+        const queue_create_info = c.VkDeviceQueueCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .queueFamilyIndex = indices.graphics_family.?,
+            .queueCount = 1,
+            .pQueuePriorities = &queue_priority,
+        };
+
+        _ = queue_create_info;
     }
 };
 
@@ -97,10 +120,14 @@ pub fn createApp(allocator: std.mem.Allocator) !App {
         return error.InstanceCreationError;
     }
 
+    _ = try checkValidationSupport(allocator);
+    try app.pickPhysicalDevice(allocator);
+    try app.createLogicalDevice(allocator);
+
     return app;
 }
 
-pub fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
+fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     var layer_count: u32 = 0;
     if (c.vkEnumerateInstanceLayerProperties(&layer_count, null) != c.VK_SUCCESS) {
         return error.EnumerateInstanceLayerProperties;

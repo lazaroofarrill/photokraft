@@ -30,12 +30,6 @@ pub fn main() !void {
     var app = try vulkan.createApp(allocator);
     defer app.cleanup();
 
-    if (!try vulkan.checkValidationSupport(allocator)) {
-        std.debug.print("Not supported\n", .{});
-    }
-
-    try app.pickPhysicalDevice(allocator);
-
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
     }
