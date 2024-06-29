@@ -11,7 +11,7 @@ pub const App = struct {
         c.vkDestroyInstance(self.instance, null);
     }
     pub fn pickPhysicalDevice(self: *App, allocator: std.mem.Allocator) !void {
-        // var physical_device = c.VkPhysicalDevice{};
+        var physical_device: c.VkPhysicalDevice = null;
 
         var device_count: u32 = 0;
         var err = c.vkEnumeratePhysicalDevices(self.instance, &device_count, null);
@@ -23,22 +23,32 @@ pub const App = struct {
             return error.NoPhysicalDevicesFound;
         }
 
-        const physical_devices_buffer = try allocator.alignedAlloc(
+        const physical_devices_slice = try allocator.alignedAlloc(
             u8,
             c.VK_PHYSICAL_DEVICE_ALIGNOF,
             c.VK_PHYSICAL_DEVICE_SIZEOF * device_count,
         );
 
-        var physical_devices: c.VkPhysicalDevice = @ptrCast(physical_devices_buffer.ptr);
+        const available_devices = @as(
+            [*]c.VkPhysicalDevice,
+            @ptrCast(physical_devices_slice.ptr),
+        )[0..device_count];
 
         err = c.vkEnumeratePhysicalDevices(
             self.instance,
             &device_count,
-            &physical_devices,
+            available_devices.ptr,
         );
-        if (err != c.VK_SUCCESS) {
-            return error.EnumeratePhysicalDevicesError;
+        if (err != c.VK_SUCCESS) return error.AssertError;
+
+        for (available_devices) |device| {
+            if (is_device_suitable(device)) {
+                physical_device = device;
+                break;
+            }
         }
+
+        if (physical_device == null) return error.AssertError;
     }
 };
 
@@ -128,5 +138,10 @@ pub fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
         }
     }
 
+    return true;
+}
+
+fn is_device_suitable(device: c.VkPhysicalDevice) bool {
+    _ = device; //We are being permissive for now.
     return true;
 }
