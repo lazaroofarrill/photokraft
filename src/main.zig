@@ -35,6 +35,8 @@ pub fn main() !void {
         std.debug.print("Not supported\n", .{});
     }
 
+    try app.pickPhysicalDevice(allocator);
+
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
     }

@@ -2,9 +2,43 @@ const std = @import("std");
 const c = @import("c.zig").c;
 
 pub const App = struct {
+    pub fn create() App {
+        const Self = @This();
+        return Self{ .instance = null };
+    }
     instance: c.VkInstance = null,
     pub fn cleanup(self: *App) void {
         c.vkDestroyInstance(self.instance, null);
+    }
+    pub fn pickPhysicalDevice(self: *App, allocator: std.mem.Allocator) !void {
+        // var physical_device = c.VkPhysicalDevice{};
+
+        var device_count: u32 = 0;
+        var err = c.vkEnumeratePhysicalDevices(self.instance, &device_count, null);
+        if (err != c.VK_SUCCESS) {
+            return error.EnumeratePhysicalDevicesError;
+        }
+
+        if (device_count == 0) {
+            return error.NoPhysicalDevicesFound;
+        }
+
+        const physical_devices_buffer = try allocator.alignedAlloc(
+            u8,
+            c.VK_PHYSICAL_DEVICE_ALIGNOF,
+            c.VK_PHYSICAL_DEVICE_SIZEOF * device_count,
+        );
+
+        var physical_devices: c.VkPhysicalDevice = @ptrCast(physical_devices_buffer.ptr);
+
+        err = c.vkEnumeratePhysicalDevices(
+            self.instance,
+            &device_count,
+            &physical_devices,
+        );
+        if (err != c.VK_SUCCESS) {
+            return error.EnumeratePhysicalDevicesError;
+        }
     }
 };
 
@@ -71,7 +105,10 @@ pub fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     const available_layers = try allocator.alloc(c.VkLayerProperties, layer_count);
     defer allocator.free(available_layers);
 
-    if (c.vkEnumerateInstanceLayerProperties(&layer_count, available_layers.ptr) != c.VK_SUCCESS) {
+    if (c.vkEnumerateInstanceLayerProperties(
+        &layer_count,
+        available_layers.ptr,
+    ) != c.VK_SUCCESS) {
         return error.EnumerateInstanceLayerProperties;
     }
 
