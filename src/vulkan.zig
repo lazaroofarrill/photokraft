@@ -2,11 +2,15 @@ const std = @import("std");
 const c = @import("c.zig").c;
 
 pub const App = struct {
+    const validation_layers = [_][]const u8{
+        "VK_LAYER_KHRONOS_validation",
+    };
+
     instance: c.VkInstance = null,
     physical_device: c.VkPhysicalDevice = null,
     logical_device: c.VkDevice = null,
 
-    pub fn cleanup(self: *App) void {
+    pub fn deinit(self: *App) void {
         c.vkDestroyInstance(self.instance, null);
     }
 
@@ -62,14 +66,32 @@ pub const App = struct {
 
         var queue_priority: f32 = 1.0;
 
-        const queue_create_info = c.VkDeviceQueueCreateInfo{
+        var queue_create_info = c.VkDeviceQueueCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .queueFamilyIndex = indices.graphics_family.?,
             .queueCount = 1,
             .pQueuePriorities = &queue_priority,
         };
 
-        _ = queue_create_info;
+        var device_features = c.VkPhysicalDeviceFeatures{};
+
+        var create_info = c.VkDeviceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pQueueCreateInfos = &queue_create_info,
+            .queueCreateInfoCount = 1,
+            .pEnabledFeatures = &device_features,
+            .enabledExtensionCount = 0,
+            .enabledLayerCount = @intCast(validation_layers.len),
+            .ppEnabledLayerNames = @ptrCast(&validation_layers),
+        };
+
+        const err = c.vkCreateDevice(
+            self.physical_device,
+            &create_info,
+            null,
+            &self.logical_device,
+        );
+        if (err != c.VK_SUCCESS) return error.CreateLogicalDeviceError;
     }
 };
 
@@ -127,45 +149,6 @@ pub fn createApp(allocator: std.mem.Allocator) !App {
     return app;
 }
 
-fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
-    var layer_count: u32 = 0;
-    if (c.vkEnumerateInstanceLayerProperties(&layer_count, null) != c.VK_SUCCESS) {
-        return error.EnumerateInstanceLayerProperties;
-    }
-
-    const validation_layers = [_][]const u8{
-        "VK_LAYER_KHRONOS_validation",
-    };
-
-    const available_layers = try allocator.alloc(c.VkLayerProperties, layer_count);
-    defer allocator.free(available_layers);
-
-    if (c.vkEnumerateInstanceLayerProperties(
-        &layer_count,
-        available_layers.ptr,
-    ) != c.VK_SUCCESS) {
-        return error.EnumerateInstanceLayerProperties;
-    }
-
-    for (validation_layers) |layer_name| {
-        var layer_found = false;
-
-        for (available_layers) |layer| {
-            if (c.strncmp(@ptrCast(&layer.layerName), layer_name.ptr, layer_name.len) == 0) {
-                std.debug.print("layer: \"{s}\" found.\n", .{layer_name});
-                layer_found = true;
-                break;
-            }
-        }
-
-        if (!layer_found) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 fn isDeviceSuitable(device: c.VkPhysicalDevice, allocator: std.mem.Allocator) !bool {
     const indices = try findQueueFamilies(device, allocator);
 
@@ -212,4 +195,39 @@ fn findQueueFamilies(
     }
 
     return indices;
+}
+
+fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
+    var layer_count: u32 = 0;
+    if (c.vkEnumerateInstanceLayerProperties(&layer_count, null) != c.VK_SUCCESS) {
+        return error.EnumerateInstanceLayerProperties;
+    }
+
+    const available_layers = try allocator.alloc(c.VkLayerProperties, layer_count);
+    defer allocator.free(available_layers);
+
+    if (c.vkEnumerateInstanceLayerProperties(
+        &layer_count,
+        available_layers.ptr,
+    ) != c.VK_SUCCESS) {
+        return error.EnumerateInstanceLayerProperties;
+    }
+
+    for (App.validation_layers) |layer_name| {
+        var layer_found = false;
+
+        for (available_layers) |layer| {
+            if (c.strncmp(@ptrCast(&layer.layerName), layer_name.ptr, layer_name.len) == 0) {
+                std.debug.print("layer: \"{s}\" found.\n", .{layer_name});
+                layer_found = true;
+                break;
+            }
+        }
+
+        if (!layer_found) {
+            return false;
+        }
+    }
+
+    return true;
 }

@@ -28,7 +28,7 @@ pub fn main() !void {
     }
 
     var app = try vulkan.createApp(allocator);
-    defer app.cleanup();
+    defer app.deinit();
 
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
