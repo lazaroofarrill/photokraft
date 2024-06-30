@@ -9,11 +9,12 @@ pub const App = struct {
     instance: c.VkInstance = null,
     physical_device: c.VkPhysicalDevice = null,
     logical_device: c.VkDevice = null,
-    graphics_queue: c.VkQueue = c.VkQueue{},
+    graphics_queue: c.VkQueue = null,
+    surface: c.VkSurfaceKHR = null,
 
     pub fn deinit(self: *App) void {
         c.vkDestroyDevice(self.logical_device, null);
-        c.vkDestroyDevice(self.physical_device, null);
+        c.vkDestroySurfaceKHR(self.instance, self.surface, null);
         c.vkDestroyInstance(self.instance, null);
     }
 
@@ -49,7 +50,7 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.AssertError;
 
         for (available_devices) |device| {
-            if (try isDeviceSuitable(device, allocator)) {
+            if (try self.isDeviceSuitable(device, allocator)) {
                 physical_device = device;
                 break;
             }
@@ -61,7 +62,7 @@ pub const App = struct {
     }
 
     fn createLogicalDevice(self: *App, allocator: std.mem.Allocator) !void {
-        const indices = try findQueueFamilies(self.physical_device, allocator);
+        const indices = try self.findQueueFamilies(self.physical_device, allocator);
 
         if (indices.graphics_family == null) {
             return error.NullGraphicsFamilyIndex;
@@ -103,9 +104,76 @@ pub const App = struct {
             &self.graphics_queue,
         );
     }
+
+    fn createSurface(self: *App, window: *c.GLFWwindow) !void {
+        const err = c.glfwCreateWindowSurface(self.instance, window, null, &self.surface);
+        if (err != c.VK_SUCCESS) return error.CreateWindowSurfaceError;
+    }
+
+    fn isDeviceSuitable(
+        self: *App,
+        device: c.VkPhysicalDevice,
+        allocator: std.mem.Allocator,
+    ) !bool {
+        const indices = try self.findQueueFamilies(device, allocator);
+        return indices.isComplete();
+    }
+
+    fn findQueueFamilies(
+        self: *App,
+        device: c.VkPhysicalDevice,
+        allocator: std.mem.Allocator,
+    ) !QueueFamilyIndices {
+        var indices = QueueFamilyIndices{
+            .graphics_family = null,
+            .present_family = null,
+        };
+
+        var queue_family_count: u32 = 0;
+        c.vkGetPhysicalDeviceQueueFamilyProperties(
+            device,
+            &queue_family_count,
+            null,
+        );
+
+        const queue_family_backing_slice = try allocator.alignedAlloc(
+            u8,
+            c.VK_QUEUE_FAMILY_PROPERTIES_ALIGNOF,
+            c.VK_QUEUE_FAMILY_PROPERTIES_SIZEOF * queue_family_count,
+        );
+
+        const queue_families = @as([*]c.VkQueueFamilyProperties, @ptrCast(queue_family_backing_slice.ptr))[0..queue_family_count];
+
+        c.vkGetPhysicalDeviceQueueFamilyProperties(
+            device,
+            &queue_family_count,
+            queue_families.ptr,
+        );
+
+        for (queue_families, 0..) |family, idx| {
+            if (family.queueFlags & c.VK_QUEUE_GRAPHICS_BIT == 1) {
+                indices.graphics_family = @intCast(idx);
+            }
+
+            var present_supported: u32 = c.VK_FALSE;
+            const err = c.vkGetPhysicalDeviceSurfaceSupportKHR(
+                device,
+                @intCast(idx),
+                self.surface,
+                &present_supported,
+            );
+            if (err != c.VK_SUCCESS) return error.GetDeviceSupportKHR;
+
+            if (present_supported == c.VK_TRUE) {
+                indices.present_family = @intCast(idx);
+            }
+        }
+
+        return indices;
+    }
 };
 
-pub fn createApp(allocator: std.mem.Allocator) !App {
+pub fn createApp(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
     const application_info: c.VkApplicationInfo = .{
         .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "Vulkan app",
@@ -152,6 +220,7 @@ pub fn createApp(allocator: std.mem.Allocator) !App {
         return error.InstanceCreationError;
     }
 
+    try app.createSurface(window);
     _ = try checkValidationSupport(allocator);
     try app.pickPhysicalDevice(allocator);
     try app.createLogicalDevice(allocator);
@@ -159,53 +228,14 @@ pub fn createApp(allocator: std.mem.Allocator) !App {
     return app;
 }
 
-fn isDeviceSuitable(device: c.VkPhysicalDevice, allocator: std.mem.Allocator) !bool {
-    const indices = try findQueueFamilies(device, allocator);
-
-    if (indices.graphics_family == null) {
-        return false;
-    }
-
-    return true;
-}
-
 const QueueFamilyIndices = struct {
     graphics_family: ?u32,
-};
+    present_family: ?u32,
 
-fn findQueueFamilies(
-    device: c.VkPhysicalDevice,
-    allocator: std.mem.Allocator,
-) !QueueFamilyIndices {
-    var indices = QueueFamilyIndices{
-        .graphics_family = null,
-    };
-
-    var queue_family_count: u32 = 0;
-    c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
-
-    const queue_family_backing_slice = try allocator.alignedAlloc(
-        u8,
-        c.VK_QUEUE_FAMILY_PROPERTIES_ALIGNOF,
-        c.VK_QUEUE_FAMILY_PROPERTIES_SIZEOF * queue_family_count,
-    );
-
-    const queue_families = @as([*]c.VkQueueFamilyProperties, @ptrCast(queue_family_backing_slice.ptr))[0..queue_family_count];
-
-    c.vkGetPhysicalDeviceQueueFamilyProperties(
-        device,
-        &queue_family_count,
-        queue_families.ptr,
-    );
-
-    for (queue_families, 0..) |family, idx| {
-        if (family.queueFlags & c.VK_QUEUE_GRAPHICS_BIT == 1) {
-            indices.graphics_family = @intCast(idx);
-        }
+    fn isComplete(self: *const QueueFamilyIndices) bool {
+        return self.graphics_family != null and self.present_family != null;
     }
-
-    return indices;
-}
+};
 
 fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     var layer_count: u32 = 0;

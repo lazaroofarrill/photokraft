@@ -5,7 +5,8 @@ const vulkan = @import("vulkan.zig");
 const GlfwError = error.GlfwError;
 
 pub fn main() !void {
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
     var err = c.glfwInit();
     if (err < 0) {
@@ -27,7 +28,7 @@ pub fn main() !void {
         return GlfwError;
     }
 
-    var app = try vulkan.createApp(allocator);
+    var app = try vulkan.createApp(allocator, window orelse unreachable);
     defer app.deinit();
 
     while (c.glfwWindowShouldClose(window) == 0) {
