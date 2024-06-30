@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("c.zig").c;
+const math = std.math;
 
 const QueueFamilyIndices = struct {
     graphics_family: ?u32,
@@ -330,6 +331,123 @@ pub const App = struct {
 
         return details;
     }
+
+    fn chooseSwapSurfaceFormat(
+        available_formats: []c.VkSurfaceFormatKHR,
+    ) !c.VkSurfaceFormatKHR {
+        if (available_formats.len == 0) return error.NoSurfacFormats;
+
+        for (available_formats) |available_format| {
+            if (available_format.format == c.VK_FORMAT_B8G8R8_SRGB and
+                available_format.colorSpace == c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
+                return available_format;
+            }
+        }
+
+        return available_formats[0];
+    }
+
+    fn chooseSwapPresentMode(
+        available_present_modes: []c.VkPresentModeKHR,
+    ) c.VkPresentModeKHR {
+        for (available_present_modes) |present_mode| {
+            if (present_mode == c.VK_PRESENT_MODE_MAILBOX_KHR) {
+                return present_mode;
+            }
+        }
+
+        return c.VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    fn chooseSwapExtent(
+        capabilites: *c.VkSurfaceCapabilitiesKHR,
+        window: *c.GLFWwindow,
+    ) c.VkExtent2D {
+        if (capabilites.currentExtent.width != (math.pow(u64, 2, 32) - 1)) {
+            return capabilites.currentExtent;
+        } else {
+            var width: c_int = 0;
+            var height: c_int = 0;
+            c.glfwGetFramebufferSize(window, &width, &height);
+
+            var actual_extent = c.VkExtent2D{
+                .width = @intCast(width),
+                .height = @intCast(height),
+            };
+
+            actual_extent.width = math.clamp(
+                actual_extent.width,
+                capabilites.minImageExtent.width,
+                capabilites.maxImageExtent.width,
+            );
+
+            actual_extent.height = math.clamp(
+                actual_extent.height,
+                capabilites.minImageExtent.height,
+                capabilites.maxImageExtent.height,
+            );
+
+            return actual_extent;
+        }
+    }
+
+    fn createSwapChain(
+        self: *App,
+        window: *c.GLFWwindow,
+        allocator: std.mem.Allocator,
+    ) !void {
+        var swap_chain_support = try self.querySwapChainSupport(
+            self.physical_device,
+            allocator,
+        );
+
+        const surface_format = try chooseSwapSurfaceFormat(
+            try swap_chain_support.formats.toOwnedSlice(),
+        );
+
+        const present_mode = chooseSwapPresentMode(
+            try swap_chain_support.present_modes.toOwnedSlice(),
+        );
+
+        const extent = chooseSwapExtent(&swap_chain_support.capabilities, window);
+
+        var image_count = swap_chain_support.capabilities.minImageCount + 1;
+
+        if (swap_chain_support.capabilities.maxImageCount > 0 and
+            image_count > swap_chain_support.capabilities.maxImageCount)
+        {
+            image_count = swap_chain_support.capabilities.maxImageCount;
+        }
+
+        var create_info = c.VkSwapchainCreateInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .surface = self.surface,
+            .minImageCount = image_count,
+            .imageColorSpace = surface_format.colorSpace,
+            .imageFormat = surface_format.format,
+            .imageExtent = extent,
+            .imageArrayLayers = 1,
+            .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .presentMode = present_mode,
+        };
+
+        const indices = try self.findQueueFamilies(self.physical_device, allocator);
+        const queue_family_indices = [_]u32{
+            indices.graphics_family.?,
+            indices.present_family.?,
+        };
+
+        if (indices.graphics_family != indices.present_family) {
+            create_info.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
+            create_info.queueFamilyIndexCount = 2;
+            create_info.pQueueFamilyIndices = &queue_family_indices;
+        } else {
+            create_info.imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE;
+            create_info.queueFamilyIndexCount = 0; // Optional
+            create_info.pQueueFamilyIndices = null; // Optional
+        }
+    }
 };
 
 pub fn createApp(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
@@ -383,6 +501,7 @@ pub fn createApp(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
     _ = try checkValidationSupport(allocator);
     try app.pickPhysicalDevice(allocator);
     try app.createLogicalDevice(allocator);
+    try app.createSwapChain(window, allocator);
 
     return app;
 }
