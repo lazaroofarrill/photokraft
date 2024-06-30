@@ -26,8 +26,13 @@ pub const App = struct {
     surface: c.VkSurfaceKHR = null,
     graphics_queue: c.VkQueue = null,
     present_queue: c.VkQueue = null,
+    swap_chain: c.VkSwapchainKHR = null,
+    swap_chain_images: []c.VkImage = undefined,
+    swap_chain_image_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
+    swap_chain_extent: c.VkExtent2D = undefined,
 
     pub fn deinit(self: *App) void {
+        c.vkDestroySwapchainKHR(self.logical_device, self.swap_chain, null);
         c.vkDestroyDevice(self.logical_device, null);
         c.vkDestroySurfaceKHR(self.instance, self.surface, null);
         c.vkDestroyInstance(self.instance, null);
@@ -430,6 +435,10 @@ pub const App = struct {
             .imageArrayLayers = 1,
             .imageUsage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
             .presentMode = present_mode,
+            .preTransform = swap_chain_support.capabilities.currentTransform,
+            .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .clipped = c.VK_TRUE,
+            .oldSwapchain = null,
         };
 
         const indices = try self.findQueueFamilies(self.physical_device, allocator);
@@ -447,6 +456,37 @@ pub const App = struct {
             create_info.queueFamilyIndexCount = 0; // Optional
             create_info.pQueueFamilyIndices = null; // Optional
         }
+
+        var err = c.vkCreateSwapchainKHR(
+            self.logical_device,
+            &create_info,
+            null,
+            &self.swap_chain,
+        );
+        if (err != c.VK_SUCCESS) return error.SwapChainCreationError;
+
+        err = c.vkGetSwapchainImagesKHR(
+            self.logical_device,
+            self.swap_chain,
+            &image_count,
+            null,
+        );
+        if (err != c.VK_SUCCESS) return error.VkError;
+
+        self.swap_chain_images = try allocator.alloc(c.VkImage, image_count);
+
+        err = c.vkGetSwapchainImagesKHR(
+            self.logical_device,
+            self.swap_chain,
+            &image_count,
+            self.swap_chain_images.ptr,
+        );
+        if (err != c.VK_SUCCESS) return error.VkError;
+
+        std.debug.print("number of swap chain images: {}\n", .{self.swap_chain_images.len});
+
+        self.swap_chain_image_format = surface_format.format;
+        self.swap_chain_extent = extent;
     }
 };
 
