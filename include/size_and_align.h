@@ -11,7 +11,7 @@ const size_t VK_QUEUE_FAMILY_PROPERTIES_SIZEOF =
     sizeof(VkQueueFamilyProperties);
 
 const size_t VK_QUEUE_FAMILY_PROPERTIES_ALIGNOF = 4;
-// Using alignof breaks my build sometimes
+// Using alignof breaks my build when there is an error elsehwere.
 //  _Alignof(VkQueueFamilyProperties);
 
 #endif

@@ -4,6 +4,9 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -38,6 +41,7 @@ pub fn build(b: *std.Build) void {
 
     const glfw = b.dependency("glfw", .{}).artifact("glfw");
 
+    exe.addIncludePath(b.path("include"));
     exe.addLibraryPath(.{
         .cwd_relative = "/Users/lazaroofarrill/VulkanSDK/1.3.268.1/macOS/lib/",
     });
@@ -45,12 +49,34 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(glfw);
     exe.installLibraryHeaders(glfw);
 
-    exe.addIncludePath(b.path("include"));
-
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
     b.installArtifact(exe);
+
+    const compile_shaders_command_args = [_][]const u8{
+        b.path("src/shaders/compile-shaders.sh").getPath(b),
+    };
+
+    var compile_shaders_child = std.process.Child.init(
+        &compile_shaders_command_args,
+        allocator,
+    );
+
+    const compile_shaders_result = compile_shaders_child.spawnAndWait() catch unreachable;
+    if (compile_shaders_result.Exited != 0) {
+        std.debug.print(
+            "Error compiling shaders. Exit code {}",
+            .{compile_shaders_result.Exited},
+        );
+        unreachable;
+    }
+
+    //Copy shaders
+    const copy_vert = b.addInstallBinFile(b.path("src/shaders/vert.spv"), "shaders/vert.spv");
+    const copy_frag = b.addInstallBinFile(b.path("src/shaders/frag.spv"), "shaders/frag.spv");
+    b.default_step.dependOn(&copy_vert.step);
+    b.default_step.dependOn(&copy_frag.step);
 
     // This *creates* a Run step in the build graph, to be executed when another
     // step is evaluated that depends on it. The next line below will establish
