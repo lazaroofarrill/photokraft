@@ -116,6 +116,13 @@ pub const App = struct {
             0,
             &self.graphics_queue,
         );
+
+        c.vkGetDeviceQueue(
+            self.logical_device,
+            indices.present_family.?,
+            0,
+            &self.present_queue,
+        );
     }
 
     fn createSurface(self: *App, window: *c.GLFWwindow) !void {
