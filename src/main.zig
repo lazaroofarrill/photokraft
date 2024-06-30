@@ -28,8 +28,8 @@ pub fn main() !void {
         return GlfwError;
     }
 
-    var app = try vulkan.createApp(allocator, window orelse unreachable);
-    defer app.deinit();
+    var app = try vulkan.App.create(allocator, window orelse unreachable);
+    defer app.destroy(allocator);
 
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();

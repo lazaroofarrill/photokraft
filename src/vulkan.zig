@@ -30,8 +30,73 @@ pub const App = struct {
     swap_chain_images: []c.VkImage = undefined,
     swap_chain_image_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     swap_chain_extent: c.VkExtent2D = undefined,
+    swap_chain_image_views: []c.VkImageView = undefined,
 
-    pub fn deinit(self: *App) void {
+    pub fn create(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
+        const application_info: c.VkApplicationInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
+            .pApplicationName = "Vulkan app",
+            .applicationVersion = c.VK_MAKE_VERSION(1, 0, 0),
+            .pEngineName = "No Engine",
+            .engineVersion = c.VK_MAKE_VERSION(1, 0, 0),
+            .apiVersion = c.VK_API_VERSION_1_0,
+            .pNext = null,
+        };
+
+        var glfw_extensions_count: u32 = 0;
+        const glfw_extensions = c.glfwGetRequiredInstanceExtensions(
+            &glfw_extensions_count,
+        );
+
+        const extensions = try allocator.alloc([*:0]const u8, glfw_extensions_count + 1);
+        defer allocator.free(extensions);
+
+        for (0..glfw_extensions_count) |i| {
+            extensions[i] = glfw_extensions[i];
+        }
+        extensions[glfw_extensions_count] = c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        glfw_extensions_count += 1;
+
+        for (extensions) |ext| {
+            std.debug.print("enabled extension: [{s}]\n", .{ext});
+        }
+
+        const create_info: c.VkInstanceCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            .pApplicationInfo = &application_info,
+            .enabledExtensionCount = glfw_extensions_count,
+            .ppEnabledExtensionNames = extensions.ptr,
+            .flags = c.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR | 0,
+            .pNext = null,
+        };
+
+        var app = App{};
+
+        const result = c.vkCreateInstance(&create_info, null, &app.instance);
+
+        if (result != c.VK_SUCCESS) {
+            std.debug.print("result code: {}\n", .{result});
+            return error.InstanceCreationError;
+        }
+
+        try app.createSurface(window);
+        _ = try checkValidationSupport(allocator);
+        try app.pickPhysicalDevice(allocator);
+        try app.createLogicalDevice(allocator);
+        try app.createSwapChain(window, allocator);
+        try app.createImageViews(allocator);
+        try app.createGraphicsPipeline(allocator);
+
+        return app;
+    }
+
+    pub fn destroy(self: *App, allocator: std.mem.Allocator) void {
+        for (self.swap_chain_image_views) |img_view| {
+            c.vkDestroyImageView(self.logical_device, img_view, null);
+        }
+
+        allocator.free(self.swap_chain_image_views);
+        allocator.free(self.swap_chain_images);
         c.vkDestroySwapchainKHR(self.logical_device, self.swap_chain, null);
         c.vkDestroyDevice(self.logical_device, null);
         c.vkDestroySurfaceKHR(self.instance, self.surface, null);
@@ -488,63 +553,48 @@ pub const App = struct {
         self.swap_chain_image_format = surface_format.format;
         self.swap_chain_extent = extent;
     }
+
+    fn createImageViews(self: *App, allocator: std.mem.Allocator) !void {
+        self.swap_chain_image_views = try allocator.alloc(
+            c.VkImageView,
+            self.swap_chain_images.len,
+        );
+
+        for (self.swap_chain_images, 0..) |img, idx| {
+            const create_info = c.VkImageViewCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = img,
+                .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+                .format = self.swap_chain_image_format,
+                .components = .{
+                    .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+                .subresourceRange = .{
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+
+            const err = c.vkCreateImageView(
+                self.logical_device,
+                &create_info,
+                null,
+                &self.swap_chain_image_views[idx],
+            );
+            if (err != c.VK_SUCCESS) return error.ImageViewCreationError;
+        }
+    }
+
+    fn createGraphicsPipeline(self: *App, allocator: std.mem.Allocator) !void {
+        //TODO
+    }
 };
-
-pub fn createApp(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
-    const application_info: c.VkApplicationInfo = .{
-        .sType = c.VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName = "Vulkan app",
-        .applicationVersion = c.VK_MAKE_VERSION(1, 0, 0),
-        .pEngineName = "No Engine",
-        .engineVersion = c.VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = c.VK_API_VERSION_1_0,
-        .pNext = null,
-    };
-
-    var glfw_extensions_count: u32 = 0;
-    const glfw_extensions = c.glfwGetRequiredInstanceExtensions(
-        &glfw_extensions_count,
-    );
-
-    const extensions = try allocator.alloc([*:0]const u8, glfw_extensions_count + 1);
-    errdefer allocator.free(extensions);
-
-    for (0..glfw_extensions_count) |i| {
-        extensions[i] = glfw_extensions[i];
-    }
-    extensions[glfw_extensions_count] = c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
-    glfw_extensions_count += 1;
-
-    for (extensions) |ext| {
-        std.debug.print("enabled extension: [{s}]\n", .{ext});
-    }
-
-    const create_info: c.VkInstanceCreateInfo = .{
-        .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pApplicationInfo = &application_info,
-        .enabledExtensionCount = glfw_extensions_count,
-        .ppEnabledExtensionNames = extensions.ptr,
-        .flags = c.VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR | 0,
-        .pNext = null,
-    };
-
-    var app = App{ .instance = null };
-
-    const result = c.vkCreateInstance(&create_info, null, &app.instance);
-
-    if (result != c.VK_SUCCESS) {
-        std.debug.print("result code: {}\n", .{result});
-        return error.InstanceCreationError;
-    }
-
-    try app.createSurface(window);
-    _ = try checkValidationSupport(allocator);
-    try app.pickPhysicalDevice(allocator);
-    try app.createLogicalDevice(allocator);
-    try app.createSwapChain(window, allocator);
-
-    return app;
-}
 
 fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     var layer_count: u32 = 0;
