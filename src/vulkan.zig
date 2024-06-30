@@ -1,9 +1,22 @@
 const std = @import("std");
 const c = @import("c.zig").c;
 
+const QueueFamilyIndices = struct {
+    graphics_family: ?u32,
+    present_family: ?u32,
+
+    fn isComplete(self: *const QueueFamilyIndices) bool {
+        return self.graphics_family != null and self.present_family != null;
+    }
+};
+
 pub const App = struct {
     const validation_layers = [_][]const u8{
         "VK_LAYER_KHRONOS_validation",
+    };
+
+    const required_extensions = [_][]const u8{
+        c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
 
     instance: c.VkInstance = null,
@@ -57,7 +70,7 @@ pub const App = struct {
             }
         }
 
-        if (physical_device == null) return error.AssertError;
+        if (physical_device == null) return error.NoSuitableDeviceFound;
 
         self.physical_device = physical_device;
     }
@@ -97,8 +110,9 @@ pub const App = struct {
             .pQueueCreateInfos = queue_create_infos.items.ptr,
             .queueCreateInfoCount = @intCast(queue_create_infos.items.len),
             .pEnabledFeatures = &device_features,
-            .enabledExtensionCount = 0,
-            .enabledLayerCount = @intCast(validation_layers.len),
+            .enabledExtensionCount = required_extensions.len,
+            .ppEnabledExtensionNames = @ptrCast(&required_extensions),
+            .enabledLayerCount = validation_layers.len,
             .ppEnabledLayerNames = @ptrCast(&validation_layers),
         };
 
@@ -136,7 +150,26 @@ pub const App = struct {
         allocator: std.mem.Allocator,
     ) !bool {
         const indices = try self.findQueueFamilies(device, allocator);
-        return indices.isComplete();
+
+        const extensions_supported = try checkDeviceExtensionSupport(device, allocator);
+
+        var swap_chain_adequate = false;
+        if (extensions_supported) {
+            const swap_chain_support = try self.querySwapChainSupport(device, allocator);
+
+            std.debug.print(
+                "formats: {any}\npresent_modes: {any}\n",
+                .{
+                    swap_chain_support.formats.items.len,
+                    swap_chain_support.present_modes.items.len,
+                },
+            );
+
+            swap_chain_adequate = swap_chain_support.formats.items.len > 0 and
+                swap_chain_support.present_modes.items.len > 0;
+        }
+
+        return indices.isComplete() and extensions_supported and swap_chain_adequate;
     }
 
     fn findQueueFamilies(
@@ -190,6 +223,112 @@ pub const App = struct {
         }
 
         return indices;
+    }
+
+    fn checkDeviceExtensionSupport(
+        device: c.VkPhysicalDevice,
+        allocator: std.mem.Allocator,
+    ) !bool {
+        var extension_count: u32 = 0;
+        var err = c.vkEnumerateDeviceExtensionProperties(
+            device,
+            null,
+            &extension_count,
+            null,
+        );
+        if (err != c.VK_SUCCESS) return error.ExtensionEnumerateError;
+
+        const available_extensions = try allocator.alloc(c.VkExtensionProperties, extension_count);
+
+        err = c.vkEnumerateDeviceExtensionProperties(
+            device,
+            null,
+            &extension_count,
+            available_extensions.ptr,
+        );
+        if (err != c.VK_SUCCESS) return error.ExtensionEnumerateError;
+
+        var required_extensions_set = std.StringHashMap(void).init(allocator);
+        defer required_extensions_set.deinit();
+
+        for (required_extensions) |ext| {
+            try required_extensions_set.put(ext, {});
+        }
+
+        for (available_extensions) |ext| {
+            const ext_len = c.strlen(&ext.extensionName);
+            const ext_name = ext.extensionName[0..ext_len];
+            _ = required_extensions_set.remove(ext_name);
+        }
+
+        return required_extensions_set.count() == 0;
+    }
+
+    const SwapChainSupportDetails = struct {
+        capabilities: c.VkSurfaceCapabilitiesKHR,
+        formats: std.ArrayList(c.VkSurfaceFormatKHR),
+        present_modes: std.ArrayList(c.VkPresentModeKHR),
+    };
+
+    fn querySwapChainSupport(
+        self: *App,
+        device: c.VkPhysicalDevice,
+        allocator: std.mem.Allocator,
+    ) !SwapChainSupportDetails {
+        var details = SwapChainSupportDetails{
+            .capabilities = c.VkSurfaceCapabilitiesKHR{},
+            .formats = std.ArrayList(c.VkSurfaceFormatKHR).init(allocator),
+            .present_modes = std.ArrayList(c.VkPresentModeKHR).init(allocator),
+        };
+
+        var err = c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+            device,
+            self.surface,
+            &details.capabilities,
+        );
+        if (err != c.VK_SUCCESS) return error.PhysicalDeviceSurfaceCapabilitiesError;
+
+        var format_count: u32 = 0;
+        err = c.vkGetPhysicalDeviceSurfaceFormatsKHR(
+            device,
+            self.surface,
+            &format_count,
+            null,
+        );
+        if (err != c.VK_SUCCESS) return error.PhysicalDeviceSurfaceFormatsKHR;
+
+        if (format_count != 0) {
+            try details.formats.resize(format_count);
+            err = c.vkGetPhysicalDeviceSurfaceFormatsKHR(
+                device,
+                self.surface,
+                &format_count,
+                details.formats.items.ptr,
+            );
+            if (err != c.VK_SUCCESS) return error.PhysicalDeviceSurfaceFormatsKHR;
+        }
+
+        var present_mode_count: u32 = 0;
+        err = c.vkGetPhysicalDeviceSurfacePresentModesKHR(
+            device,
+            self.surface,
+            &present_mode_count,
+            null,
+        );
+        if (err != c.VK_SUCCESS) return error.VkError;
+
+        if (present_mode_count != 0) {
+            try details.present_modes.resize(present_mode_count);
+            err = c.vkGetPhysicalDeviceSurfacePresentModesKHR(
+                device,
+                self.surface,
+                &present_mode_count,
+                details.present_modes.items.ptr,
+            );
+            if (err != c.VK_SUCCESS) return error.VkError;
+        }
+
+        return details;
     }
 };
 
@@ -247,15 +386,6 @@ pub fn createApp(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
 
     return app;
 }
-
-const QueueFamilyIndices = struct {
-    graphics_family: ?u32,
-    present_family: ?u32,
-
-    fn isComplete(self: *const QueueFamilyIndices) bool {
-        return self.graphics_family != null and self.present_family != null;
-    }
-};
 
 fn checkValidationSupport(allocator: std.mem.Allocator) !bool {
     var layer_count: u32 = 0;
