@@ -9,8 +9,9 @@ pub const App = struct {
     instance: c.VkInstance = null,
     physical_device: c.VkPhysicalDevice = null,
     logical_device: c.VkDevice = null,
-    graphics_queue: c.VkQueue = null,
     surface: c.VkSurfaceKHR = null,
+    graphics_queue: c.VkQueue = null,
+    present_queue: c.VkQueue = null,
 
     pub fn deinit(self: *App) void {
         c.vkDestroyDevice(self.logical_device, null);
@@ -64,25 +65,37 @@ pub const App = struct {
     fn createLogicalDevice(self: *App, allocator: std.mem.Allocator) !void {
         const indices = try self.findQueueFamilies(self.physical_device, allocator);
 
-        if (indices.graphics_family == null) {
-            return error.NullGraphicsFamilyIndex;
+        if (!indices.isComplete()) {
+            return error.NullQueueFamily;
         }
 
         var queue_priority: f32 = 1.0;
 
-        var queue_create_info = c.VkDeviceQueueCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = indices.graphics_family.?,
-            .queueCount = 1,
-            .pQueuePriorities = &queue_priority,
-        };
-
         var device_features = c.VkPhysicalDeviceFeatures{};
+
+        var unique_families = std.AutoHashMap(u32, void).init(allocator);
+        defer unique_families.deinit();
+
+        try unique_families.put(indices.graphics_family.?, {});
+        try unique_families.put(indices.present_family.?, {});
+
+        var queue_create_infos = std.ArrayList(c.VkDeviceQueueCreateInfo).init(allocator);
+
+        var iterator = unique_families.iterator();
+        while (iterator.next()) |family| {
+            const queue_create_info = c.VkDeviceQueueCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueFamilyIndex = family.key_ptr.*,
+                .queueCount = 1,
+                .pQueuePriorities = &queue_priority,
+            };
+            try queue_create_infos.append(queue_create_info);
+        }
 
         var create_info = c.VkDeviceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pQueueCreateInfos = &queue_create_info,
-            .queueCreateInfoCount = 1,
+            .pQueueCreateInfos = queue_create_infos.items.ptr,
+            .queueCreateInfoCount = @intCast(queue_create_infos.items.len),
             .pEnabledFeatures = &device_features,
             .enabledExtensionCount = 0,
             .enabledLayerCount = @intCast(validation_layers.len),
