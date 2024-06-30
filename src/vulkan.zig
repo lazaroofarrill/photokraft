@@ -9,8 +9,11 @@ pub const App = struct {
     instance: c.VkInstance = null,
     physical_device: c.VkPhysicalDevice = null,
     logical_device: c.VkDevice = null,
+    graphics_queue: c.VkQueue = c.VkQueue{},
 
     pub fn deinit(self: *App) void {
+        c.vkDestroyDevice(self.logical_device, null);
+        c.vkDestroyDevice(self.physical_device, null);
         c.vkDestroyInstance(self.instance, null);
     }
 
@@ -92,6 +95,13 @@ pub const App = struct {
             &self.logical_device,
         );
         if (err != c.VK_SUCCESS) return error.CreateLogicalDeviceError;
+
+        c.vkGetDeviceQueue(
+            self.logical_device,
+            indices.graphics_family.?,
+            0,
+            &self.graphics_queue,
+        );
     }
 };
 
