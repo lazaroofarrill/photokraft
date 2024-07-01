@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("c.zig").c;
 const math = std.math;
+const io = @import("io.zig");
 
 const QueueFamilyIndices = struct {
     graphics_family: ?u32,
@@ -31,6 +32,7 @@ pub const App = struct {
     swap_chain_image_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     swap_chain_extent: c.VkExtent2D = undefined,
     swap_chain_image_views: []c.VkImageView = undefined,
+    pipeline_layout: c.VkPipelineLayout = null,
 
     pub fn create(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
         const application_info: c.VkApplicationInfo = .{
@@ -85,12 +87,15 @@ pub const App = struct {
         try app.createLogicalDevice(allocator);
         try app.createSwapChain(window, allocator);
         try app.createImageViews(allocator);
+        try app.createRenderPass();
         try app.createGraphicsPipeline(allocator);
 
         return app;
     }
 
     pub fn destroy(self: *App, allocator: std.mem.Allocator) void {
+        c.vkDestroyPipelineLayout(self.logical_device, self.pipeline_layout, null);
+
         for (self.swap_chain_image_views) |img_view| {
             c.vkDestroyImageView(self.logical_device, img_view, null);
         }
@@ -591,8 +596,196 @@ pub const App = struct {
         }
     }
 
+    fn createRenderPass(self: *App) !void {
+        const color_attachment = c.VkAttachmentDescription{
+            .format = self.swap_chain_image_format,
+            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        };
+    }
+
     fn createGraphicsPipeline(self: *App, allocator: std.mem.Allocator) !void {
-        //TODO
+        const vert_shader_path = try std.fs.cwd().realpathAlloc(
+            allocator,
+            "src/shaders/vert.spv",
+        );
+        defer allocator.free(vert_shader_path);
+
+        const frag_shader_path = try std.fs.cwd().realpathAlloc(
+            allocator,
+            "src/shaders/frag.spv",
+        );
+        defer allocator.free(frag_shader_path);
+
+        const vert_shader_code = try io.readFile(vert_shader_path, allocator);
+        const frag_shader_code = try io.readFile(frag_shader_path, allocator);
+
+        const vert_shader_module = try self.createShaderModule(vert_shader_code);
+        defer c.vkDestroyShaderModule(self.logical_device, vert_shader_module, null);
+
+        const frag_shader_module = try self.createShaderModule(frag_shader_code);
+        defer c.vkDestroyShaderModule(self.logical_device, frag_shader_module, null);
+
+        const vert_shader_stage_info = c.VkPipelineShaderStageCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_shader_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const frag_shader_stage_info = c.VkPipelineShaderStageCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_shader_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
+            vert_shader_stage_info,
+            frag_shader_stage_info,
+        };
+
+        const dynamic_states = [_]c.VkDynamicState{
+            c.VK_DYNAMIC_STATE_VIEWPORT,
+            c.VK_DYNAMIC_STATE_SCISSOR,
+        };
+
+        const dynamic_state_create_info = c.VkPipelineDynamicStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const vertex_input_info = c.VkPipelineVertexInputStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = null,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = null,
+        };
+
+        const input_assembly = c.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = c.VK_FALSE,
+        };
+
+        const viewport = c.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swap_chain_extent.width),
+            .height = @floatFromInt(self.swap_chain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+
+        const scissor = c.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swap_chain_extent,
+        };
+
+        const viewport_state = c.VkPipelineViewportStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = &viewport,
+            .scissorCount = 1,
+            .pScissors = &scissor,
+        };
+
+        const rasterizer = c.VkPipelineRasterizationStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = c.VK_FALSE,
+            .rasterizerDiscardEnable = c.VK_FALSE,
+            .polygonMode = c.VK_POLYGON_MODE_FILL,
+            .lineWidth = 1.0,
+            .cullMode = c.VK_CULL_MODE_BACK_BIT,
+            .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+            .depthBiasEnable = c.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+        };
+
+        const multisampling = c.VkPipelineMultisampleStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .sampleShadingEnable = c.VK_FALSE,
+            .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = c.VK_FALSE,
+            .alphaToOneEnable = c.VK_FALSE,
+        };
+
+        const color_blend_attachment = c.VkPipelineColorBlendAttachmentState{
+            .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT |
+                c.VK_COLOR_COMPONENT_G_BIT |
+                c.VK_COLOR_COMPONENT_B_BIT |
+                c.VK_COLOR_COMPONENT_A_BIT,
+            .blendEnable = c.VK_FALSE,
+            .srcColorBlendFactor = c.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+            .colorBlendOp = c.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = c.VK_BLEND_OP_ADD,
+        };
+
+        const color_blending = c.VkPipelineColorBlendStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .logicOpEnable = c.VK_FALSE,
+            .logicOp = c.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = [4]u32{
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            },
+        };
+
+        const pipeline_layout_info = c.VkPipelineLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 0,
+            .pSetLayouts = null,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
+        };
+
+        const err = c.vkCreatePipelineLayout(
+            self.logical_device,
+            &pipeline_layout_info,
+            null,
+            &self.pipeline_layout,
+        );
+        if (err != c.VK_SUCCESS) return error.CreatePipelineLayoutError;
+    }
+
+    fn createShaderModule(self: *App, code: []u8) !c.VkShaderModule {
+        var create_info = c.VkShaderModuleCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .codeSize = code.len,
+            .pCode = @ptrCast(@alignCast(code.ptr)),
+        };
+
+        var shader_module: c.VkShaderModule = null;
+
+        const err = c.vkCreateShaderModule(
+            self.logical_device,
+            &create_info,
+            null,
+            &shader_module,
+        );
+        if (err != c.VK_SUCCESS) return error.ShaderModuleCreationError;
+
+        return shader_module;
     }
 };
 
