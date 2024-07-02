@@ -32,7 +32,9 @@ pub const App = struct {
     swap_chain_image_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     swap_chain_extent: c.VkExtent2D = undefined,
     swap_chain_image_views: []c.VkImageView = undefined,
+    render_pass: c.VkRenderPass = null,
     pipeline_layout: c.VkPipelineLayout = null,
+    graphics_pipeline: c.VkPipeline = null,
 
     pub fn create(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
         const application_info: c.VkApplicationInfo = .{
@@ -94,7 +96,9 @@ pub const App = struct {
     }
 
     pub fn destroy(self: *App, allocator: std.mem.Allocator) void {
+        c.vkDestroyPipeline(self.logical_device, self.graphics_pipeline, null);
         c.vkDestroyPipelineLayout(self.logical_device, self.pipeline_layout, null);
+        c.vkDestroyRenderPass(self.logical_device, self.render_pass, null);
 
         for (self.swap_chain_image_views) |img_view| {
             c.vkDestroyImageView(self.logical_device, img_view, null);
@@ -607,6 +611,33 @@ pub const App = struct {
             .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
             .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         };
+
+        const color_attachment_ref = c.VkAttachmentReference{
+            .attachment = 0,
+            .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        const subpass = c.VkSubpassDescription{
+            .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_attachment_ref,
+        };
+
+        const render_pass_info = c.VkRenderPassCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &color_attachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+        };
+
+        const err = c.vkCreateRenderPass(
+            self.logical_device,
+            &render_pass_info,
+            null,
+            &self.render_pass,
+        );
+        if (err != c.VK_SUCCESS) return error.RenderPassCreationError;
     }
 
     fn createGraphicsPipeline(self: *App, allocator: std.mem.Allocator) !void {
@@ -743,7 +774,7 @@ pub const App = struct {
             .logicOp = c.VK_LOGIC_OP_COPY,
             .attachmentCount = 1,
             .pAttachments = &color_blend_attachment,
-            .blendConstants = [4]u32{
+            .blendConstants = [4]f32{
                 0.0,
                 0.0,
                 0.0,
@@ -759,13 +790,42 @@ pub const App = struct {
             .pPushConstantRanges = null,
         };
 
-        const err = c.vkCreatePipelineLayout(
+        var err = c.vkCreatePipelineLayout(
             self.logical_device,
             &pipeline_layout_info,
             null,
             &self.pipeline_layout,
         );
         if (err != c.VK_SUCCESS) return error.CreatePipelineLayoutError;
+
+        const pipeline_info = c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = null,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = &dynamic_state_create_info,
+            .layout = self.pipeline_layout,
+            .renderPass = self.render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        err = c.vkCreateGraphicsPipelines(
+            self.logical_device,
+            null,
+            1,
+            &pipeline_info,
+            null,
+            &self.graphics_pipeline,
+        );
+        if (err != c.VK_SUCCESS) return error.PipelineCreationError;
     }
 
     fn createShaderModule(self: *App, code: []u8) !c.VkShaderModule {
