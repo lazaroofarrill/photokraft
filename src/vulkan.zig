@@ -642,12 +642,23 @@ pub const App = struct {
             .pColorAttachments = &color_attachment_ref,
         };
 
+        const dependency = c.VkSubpassDependency{
+            .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0,
+            .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        };
+
         const render_pass_info = c.VkRenderPassCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
             .attachmentCount = 1,
             .pAttachments = &color_attachment,
             .subpassCount = 1,
             .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &dependency,
         };
 
         const err = c.vkCreateRenderPass(
@@ -950,7 +961,7 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.BeginCommandBufferError;
 
         const clear_color = c.VkClearValue{
-            .color = [4]f32{ 0.0, 0.0, 0.0, 1.0 },
+            .color = .{ .float32 = [4]f32{ 0.0, 0.0, 0.0, 1.0 } },
         };
 
         const render_pass_info = c.VkRenderPassBeginInfo{
@@ -1010,6 +1021,7 @@ pub const App = struct {
 
         const fence_info = c.VkFenceCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
         };
 
         var err = c.vkCreateSemaphore(
@@ -1037,14 +1049,76 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.FenceCreateError;
     }
 
-    fn drawFrame(self: *App) !void {
-        c.vkWaitForFences(
+    pub fn drawFrame(self: *App) !void {
+        var err = c.vkWaitForFences(
             self.logical_device,
             1,
             &self.in_flight_fence,
             c.VK_TRUE,
             c.UINT64_MAX,
         );
+        if (err != c.VK_SUCCESS) return error.WaitForFenceError;
+
+        err = c.vkResetFences(self.logical_device, 1, &self.in_flight_fence);
+        if (err != c.VK_SUCCESS) return error.ResetFenceError;
+
+        var image_index: u32 = 0;
+        err = c.vkAcquireNextImageKHR(
+            self.logical_device,
+            self.swap_chain,
+            c.UINT64_MAX,
+            self.image_available_semaphore,
+            null,
+            &image_index,
+        );
+        if (err != c.VK_SUCCESS) return error.AcquireImageError;
+
+        err = c.vkResetCommandBuffer(self.command_buffer, 0);
+        if (err != c.VK_SUCCESS) return error.ResetCommandBufferError;
+
+        try self.recordCommandBuffer(self.command_buffer, image_index);
+
+        const wait_semaphores = [_]c.VkSemaphore{self.image_available_semaphore};
+
+        const wait_stages = [_]c.VkPipelineStageFlags{
+            c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        };
+
+        const signal_semaphores = [_]c.VkSemaphore{self.render_finished_semaphore};
+
+        var submit_info = c.VkSubmitInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &wait_semaphores,
+            .pWaitDstStageMask = &wait_stages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &self.command_buffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &signal_semaphores,
+        };
+
+        err = c.vkQueueSubmit(
+            self.graphics_queue,
+            1,
+            &submit_info,
+            self.in_flight_fence,
+        );
+        if (err != c.VK_SUCCESS) return error.VkQueueSubmitError;
+
+        const swap_chains = [_]c.VkSwapchainKHR{self.swap_chain};
+
+        const present_info = c.VkPresentInfoKHR{
+            .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &signal_semaphores,
+            .swapchainCount = 1,
+            .pSwapchains = &swap_chains,
+            .pImageIndices = &image_index,
+            .pResults = null,
+        };
+
+        err = c.vkQueuePresentKHR(self.present_queue, &present_info);
+        if (err != c.VK_SUCCESS) return error.VkQuePresentError;
     }
 };
 

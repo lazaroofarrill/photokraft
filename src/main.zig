@@ -30,8 +30,11 @@ pub fn main() !void {
 
     var app = try vulkan.App.create(allocator, window orelse unreachable);
     defer app.destroy(allocator);
+    defer _ = c.vkDeviceWaitIdle(app.logical_device);
 
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
+
+        try app.drawFrame();
     }
 }
