@@ -35,6 +35,12 @@ pub const App = struct {
     render_pass: c.VkRenderPass = null,
     pipeline_layout: c.VkPipelineLayout = null,
     graphics_pipeline: c.VkPipeline = null,
+    swap_chain_frame_buffers: []c.VkFramebuffer = undefined,
+    command_pool: c.VkCommandPool = null,
+    command_buffer: c.VkCommandBuffer = null,
+    image_available_semaphore: c.VkSemaphore = null,
+    render_finished_semaphore: c.VkSemaphore = null,
+    in_flight_fence: c.VkFence = null,
 
     pub fn create(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
         const application_info: c.VkApplicationInfo = .{
@@ -91,11 +97,24 @@ pub const App = struct {
         try app.createImageViews(allocator);
         try app.createRenderPass();
         try app.createGraphicsPipeline(allocator);
+        try app.createFrameBuffers(allocator);
+        try app.createCommandPool(allocator);
+        try app.createCommandBuffer();
+        try app.createSyncObjects();
 
         return app;
     }
 
     pub fn destroy(self: *App, allocator: std.mem.Allocator) void {
+        c.vkDestroySemaphore(self.logical_device, self.image_available_semaphore, null);
+        c.vkDestroySemaphore(self.logical_device, self.render_finished_semaphore, null);
+        c.vkDestroyFence(self.logical_device, self.in_flight_fence, null);
+
+        c.vkDestroyCommandPool(self.logical_device, self.command_pool, null);
+        for (self.swap_chain_frame_buffers) |frame_buffer| {
+            c.vkDestroyFramebuffer(self.logical_device, frame_buffer, null);
+        }
+        allocator.free(self.swap_chain_frame_buffers);
         c.vkDestroyPipeline(self.logical_device, self.graphics_pipeline, null);
         c.vkDestroyPipelineLayout(self.logical_device, self.pipeline_layout, null);
         c.vkDestroyRenderPass(self.logical_device, self.render_pass, null);
@@ -846,6 +865,186 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.ShaderModuleCreationError;
 
         return shader_module;
+    }
+
+    fn createFrameBuffers(self: *App, allocator: std.mem.Allocator) !void {
+        self.swap_chain_frame_buffers = try allocator.alloc(
+            c.VkFramebuffer,
+            self.swap_chain_image_views.len,
+        );
+
+        for (self.swap_chain_image_views, 0..) |image_view, idx| {
+            const attachments = [_]c.VkImageView{
+                image_view,
+            };
+
+            const frame_buffer_info = c.VkFramebufferCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = self.render_pass,
+                .attachmentCount = 1,
+                .pAttachments = &attachments,
+                .width = self.swap_chain_extent.width,
+                .height = self.swap_chain_extent.height,
+                .layers = 1,
+            };
+
+            const err = c.vkCreateFramebuffer(
+                self.logical_device,
+                &frame_buffer_info,
+                null,
+                &self.swap_chain_frame_buffers[idx],
+            );
+            if (err != c.VK_SUCCESS) return error.FrameBufferCreationError;
+        }
+    }
+
+    fn createCommandPool(self: *App, allocator: std.mem.Allocator) !void {
+        const queue_family_indices = try self.findQueueFamilies(
+            self.physical_device,
+            allocator,
+        );
+
+        const pool_info = c.VkCommandPoolCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = queue_family_indices.graphics_family.?,
+        };
+
+        const err = c.vkCreateCommandPool(
+            self.logical_device,
+            &pool_info,
+            null,
+            &self.command_pool,
+        );
+        if (err != c.VK_SUCCESS) return error.CommandPoolCreationError;
+    }
+
+    fn createCommandBuffer(self: *App) !void {
+        const alloc_info = c.VkCommandBufferAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = self.command_pool,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        const err = c.vkAllocateCommandBuffers(
+            self.logical_device,
+            &alloc_info,
+            &self.command_buffer,
+        );
+        if (err != c.VK_SUCCESS) return error.AllocateCommandBufferError;
+    }
+
+    fn recordCommandBuffer(
+        self: *App,
+        command_buffer: c.VkCommandBuffer,
+        image_index: u32,
+    ) !void {
+        const begin_info = c.VkCommandBufferBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        };
+
+        var err = c.vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (err != c.VK_SUCCESS) return error.BeginCommandBufferError;
+
+        const clear_color = c.VkClearValue{
+            .color = [4]f32{ 0.0, 0.0, 0.0, 1.0 },
+        };
+
+        const render_pass_info = c.VkRenderPassBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = self.render_pass,
+            .framebuffer = self.swap_chain_frame_buffers[image_index],
+            .renderArea = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.swap_chain_extent,
+            },
+            .clearValueCount = 1,
+            .pClearValues = &clear_color,
+        };
+
+        c.vkCmdBeginRenderPass(
+            command_buffer,
+            &render_pass_info,
+            c.VK_SUBPASS_CONTENTS_INLINE,
+        );
+
+        c.vkCmdBindPipeline(
+            command_buffer,
+            c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.graphics_pipeline,
+        );
+
+        const viewport = c.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swap_chain_extent.width),
+            .height = @floatFromInt(self.swap_chain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+
+        c.vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+        const scissor = c.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swap_chain_extent,
+        };
+
+        c.vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+        c.vkCmdDraw(command_buffer, 3, 1, 0, 0);
+
+        c.vkCmdEndRenderPass(command_buffer);
+
+        err = c.vkEndCommandBuffer(command_buffer);
+        if (err != c.VK_SUCCESS) return error.VkCmdError;
+    }
+
+    fn createSyncObjects(self: *App) !void {
+        const semaphore_info = c.VkSemaphoreCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        };
+
+        const fence_info = c.VkFenceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        };
+
+        var err = c.vkCreateSemaphore(
+            self.logical_device,
+            &semaphore_info,
+            null,
+            &self.image_available_semaphore,
+        );
+        if (err != c.VK_SUCCESS) return error.SemaphoreCreateError;
+
+        err = c.vkCreateSemaphore(
+            self.logical_device,
+            &semaphore_info,
+            null,
+            &self.image_available_semaphore,
+        );
+        if (err != c.VK_SUCCESS) return error.SemaphoreCreateError;
+
+        err = c.vkCreateFence(
+            self.logical_device,
+            &fence_info,
+            null,
+            &self.in_flight_fence,
+        );
+        if (err != c.VK_SUCCESS) return error.FenceCreateError;
+    }
+
+    fn drawFrame(self: *App) !void {
+        c.vkWaitForFences(
+            self.logical_device,
+            1,
+            &self.in_flight_fence,
+            c.VK_TRUE,
+            c.UINT64_MAX,
+        );
     }
 };
 
