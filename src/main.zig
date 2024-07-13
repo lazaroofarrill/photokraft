@@ -32,9 +32,26 @@ pub fn main() !void {
     defer app.destroy(allocator);
     defer _ = c.vkDeviceWaitIdle(app.logical_device);
 
+    c.glfwSetWindowUserPointer(window, &app);
+    _ = c.glfwSetFramebufferSizeCallback(window, frameBufferResizeCallback);
+
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
 
         try app.drawFrame(window orelse unreachable, allocator);
     }
+}
+
+fn frameBufferResizeCallback(
+    window: ?*c.GLFWwindow,
+    width: c_int,
+    height: c_int,
+) callconv(.C) void {
+    _ = width;
+    _ = height;
+
+    var app: *vulkan.App = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(
+        window,
+    )));
+    app.frameBufferResized = true;
 }

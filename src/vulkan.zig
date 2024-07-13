@@ -41,6 +41,7 @@ pub const App = struct {
     image_available_semaphore: c.VkSemaphore = null,
     render_finished_semaphore: c.VkSemaphore = null,
     in_flight_fence: c.VkFence = null,
+    frameBufferResized: bool = false,
 
     pub fn create(allocator: std.mem.Allocator, window: *c.GLFWwindow) !App {
         const application_info: c.VkApplicationInfo = .{
@@ -1061,9 +1062,6 @@ pub const App = struct {
         );
         if (err != c.VK_SUCCESS) return error.WaitForFenceError;
 
-        err = c.vkResetFences(self.logical_device, 1, &self.in_flight_fence);
-        if (err != c.VK_SUCCESS) return error.ResetFenceError;
-
         var image_index: u32 = 0;
         err = c.vkAcquireNextImageKHR(
             self.logical_device,
@@ -1074,10 +1072,17 @@ pub const App = struct {
             &image_index,
         );
         if (err == c.VK_ERROR_OUT_OF_DATE_KHR or
-            err == c.VK_SUBOPTIMAL_KHR)
+            err == c.VK_SUBOPTIMAL_KHR or
+            self.frameBufferResized)
         {
-            try self.recreateSwapChain(window, allocator);
-        } else if (err != c.VK_SUCCESS) return error.AcquireImageError;
+            self.frameBufferResized = false;
+            return try self.recreateSwapChain(window, allocator);
+        } else if (err != c.VK_SUCCESS) {
+            return error.AcquireImageError;
+        }
+
+        err = c.vkResetFences(self.logical_device, 1, &self.in_flight_fence);
+        if (err != c.VK_SUCCESS) return error.ResetFenceError;
 
         err = c.vkResetCommandBuffer(self.command_buffer, 0);
         if (err != c.VK_SUCCESS) return error.ResetCommandBufferError;
