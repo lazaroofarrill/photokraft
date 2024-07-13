@@ -106,26 +106,26 @@ pub const App = struct {
     }
 
     pub fn destroy(self: *App, allocator: std.mem.Allocator) void {
+        self.cleanupSwapChain(allocator);
+
+        c.vkDestroyPipeline(
+            self.logical_device,
+            self.graphics_pipeline,
+            null,
+        );
+        c.vkDestroyPipelineLayout(
+            self.logical_device,
+            self.pipeline_layout,
+            null,
+        );
+        c.vkDestroyRenderPass(self.logical_device, self.render_pass, null);
+
         c.vkDestroySemaphore(self.logical_device, self.image_available_semaphore, null);
         c.vkDestroySemaphore(self.logical_device, self.render_finished_semaphore, null);
         c.vkDestroyFence(self.logical_device, self.in_flight_fence, null);
 
         c.vkDestroyCommandPool(self.logical_device, self.command_pool, null);
-        for (self.swap_chain_frame_buffers) |frame_buffer| {
-            c.vkDestroyFramebuffer(self.logical_device, frame_buffer, null);
-        }
-        allocator.free(self.swap_chain_frame_buffers);
-        c.vkDestroyPipeline(self.logical_device, self.graphics_pipeline, null);
-        c.vkDestroyPipelineLayout(self.logical_device, self.pipeline_layout, null);
-        c.vkDestroyRenderPass(self.logical_device, self.render_pass, null);
 
-        for (self.swap_chain_image_views) |img_view| {
-            c.vkDestroyImageView(self.logical_device, img_view, null);
-        }
-
-        allocator.free(self.swap_chain_image_views);
-        allocator.free(self.swap_chain_images);
-        c.vkDestroySwapchainKHR(self.logical_device, self.swap_chain, null);
         c.vkDestroyDevice(self.logical_device, null);
         c.vkDestroySurfaceKHR(self.instance, self.surface, null);
         c.vkDestroyInstance(self.instance, null);
@@ -575,8 +575,6 @@ pub const App = struct {
             self.swap_chain_images.ptr,
         );
         if (err != c.VK_SUCCESS) return error.VkError;
-
-        std.debug.print("number of swap chain images: {}\n", .{self.swap_chain_images.len});
 
         self.swap_chain_image_format = surface_format.format;
         self.swap_chain_extent = extent;
@@ -1049,7 +1047,11 @@ pub const App = struct {
         if (err != c.VK_SUCCESS) return error.FenceCreateError;
     }
 
-    pub fn drawFrame(self: *App) !void {
+    pub fn drawFrame(
+        self: *App,
+        window: *c.GLFWwindow,
+        allocator: std.mem.Allocator,
+    ) !void {
         var err = c.vkWaitForFences(
             self.logical_device,
             1,
@@ -1071,7 +1073,11 @@ pub const App = struct {
             null,
             &image_index,
         );
-        if (err != c.VK_SUCCESS) return error.AcquireImageError;
+        if (err == c.VK_ERROR_OUT_OF_DATE_KHR or
+            err == c.VK_SUBOPTIMAL_KHR)
+        {
+            try self.recreateSwapChain(window, allocator);
+        } else if (err != c.VK_SUCCESS) return error.AcquireImageError;
 
         err = c.vkResetCommandBuffer(self.command_buffer, 0);
         if (err != c.VK_SUCCESS) return error.ResetCommandBufferError;
@@ -1119,6 +1125,37 @@ pub const App = struct {
 
         err = c.vkQueuePresentKHR(self.present_queue, &present_info);
         if (err != c.VK_SUCCESS) return error.VkQuePresentError;
+    }
+
+    pub fn recreateSwapChain(
+        self: *App,
+        window: *c.GLFWwindow,
+        allocator: std.mem.Allocator,
+    ) !void {
+        const err = c.vkDeviceWaitIdle(self.logical_device);
+        if (err != c.VK_SUCCESS) return error.WaitIdleError;
+
+        self.cleanupSwapChain(allocator);
+
+        try self.createSwapChain(window, allocator);
+        try self.createImageViews(allocator);
+        try self.createFrameBuffers(allocator);
+    }
+
+    fn cleanupSwapChain(self: *App, allocator: std.mem.Allocator) void {
+        for (self.swap_chain_frame_buffers) |frame_buffer| {
+            c.vkDestroyFramebuffer(self.logical_device, frame_buffer, null);
+        }
+        allocator.free(self.swap_chain_frame_buffers);
+
+        for (self.swap_chain_image_views) |img_view| {
+            c.vkDestroyImageView(self.logical_device, img_view, null);
+        }
+
+        allocator.free(self.swap_chain_image_views);
+        allocator.free(self.swap_chain_images);
+
+        c.vkDestroySwapchainKHR(self.logical_device, self.swap_chain, null);
     }
 };
 

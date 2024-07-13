@@ -35,6 +35,6 @@ pub fn main() !void {
     while (c.glfwWindowShouldClose(window) == 0) {
         c.glfwPollEvents();
 
-        try app.drawFrame();
+        try app.drawFrame(window orelse unreachable, allocator);
     }
 }
