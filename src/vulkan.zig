@@ -1137,6 +1137,16 @@ pub const App = struct {
         window: *c.GLFWwindow,
         allocator: std.mem.Allocator,
     ) !void {
+        var width: c_int = 0;
+        var height: c_int = 0;
+
+        c.glfwGetFramebufferSize(window, &width, &height);
+        while (width == 0 or height == 0) {
+            std.debug.print("window minimized\n", .{});
+            c.glfwGetFramebufferSize(window, &width, &height);
+            c.glfwWaitEvents();
+        }
+
         const err = c.vkDeviceWaitIdle(self.logical_device);
         if (err != c.VK_SUCCESS) return error.WaitIdleError;
 
